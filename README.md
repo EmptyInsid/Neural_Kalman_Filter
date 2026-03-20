@@ -13,10 +13,10 @@ Neural_Kalman_Filter/
 │   ├── classic/          # реализация классического фильтра Калмана на python
 │   └── matlab_calman/    # реализация классического фильтра Калмана на matlab
 └── app/                 # Основная папка с вариантами приложения
-    ├── classic_calman/      # Основная папака с приложением
+    ├── classic_calman_app/      # Основная папака с приложением
     |   ├── gui/              # GUI для приложения
     |   └── model/            # Функции и модели для Фильтра Калмана
-    └── neural_calman/       # Основная папака с приложением
+    └── neural_calman_app/       # Основная папака с приложением
         ├── gui/              # GUI для приложения
         ├── neural/           # Модели нейронных сетей для фильтра
         └── model/            # Функции и модели для Фильтра Калмана
@@ -36,7 +36,11 @@ pip3 install -r requirements.txt
 # Запуск экспериментальных скриптов
 python3 -m experiment.classic.by_matlab
 
-# Запуск приложения
+# Запуск классического приложения
 python3 -m app.classic_calman_app.gui.gui
+
+# Запуск приложения с нейросетью
+python3 -m app.neural_calman_app.neural.train_model # предварительно необходимо обучить модель
+python3 -m app.neural_calman_app.gui.gui
 
 ```
