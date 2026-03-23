@@ -75,7 +75,7 @@ def cg_solve(f_Hx, b, cg_iters=15, residual_tol=1e-8):
 
 class TrainingThread(QThread):
     progress_signal = pyqtSignal(int, float)
-    finished_signal = pyqtSignal(str, list)
+    finished_signal = pyqtSignal(str, object, object)
     error_signal = pyqtSignal(str)
 
     def __init__(self, optimizer_name, epochs):
@@ -140,46 +140,68 @@ class TrainingThread(QThread):
                     if epoch % 10 == 0:
                         self.progress_signal.emit(epoch, loss.item())
 
-                torch.save(model.state_dict(), "kalman_noise_net_adam.pth")
-
 
             elif self.optimizer_name == "ER":
 
-
-                lr_er = 0.05
                 damping = 1.0
                 cg_max_iters = 15
 
                 for epoch in range(self.epochs):
-
                     preds = model(X)
                     loss = loss_fn(preds, y)
-                    loss_history.append(loss.item())
+                    current_loss_val = loss.item()
+                    loss_history.append(current_loss_val)
+
                     params = list(model.parameters())
                     grads = torch.autograd.grad(loss, params, create_graph=True)
                     flat_grads = torch.cat([g.contiguous().view(-1) for g in grads])
 
-                    grad_norm = torch.norm(flat_grads)
+                    if torch.norm(flat_grads) < 1e-7:
+                        print(f"ER сошелся досрочно на эпохе {epoch}")
+                        break
 
-                    if grad_norm > 1.0:
-                        flat_grads = flat_grads / grad_norm
 
                     def hvp_damped(v):
                         h_v = hvp(loss, params, v)
                         return h_v + damping * v
 
                     step_direction = cg_solve(hvp_damped, -flat_grads, cg_iters=cg_max_iters)
-
+                    expected_improve = torch.dot(flat_grads, step_direction).item()
                     current_weights = get_flat_params(model)
-                    new_weights = current_weights + lr_er * step_direction
 
-                    set_flat_params(model, new_weights)
+                    step_size = 1.0
+                    c1 = 1e-4
+                    step_accepted = False
 
-                    self.progress_signal.emit(epoch, loss.item())
+                    for ls_iter in range(10):
+                        new_weights = current_weights + step_size * step_direction
+                        set_flat_params(model, new_weights)
 
-                torch.save(model.state_dict(), "kalman_noise_net_er.pth")
+                        with torch.no_grad():
+                            new_preds = model(X)
+                            new_loss = loss_fn(new_preds, y).item()
 
-            self.finished_signal.emit(self.optimizer_name, loss_history)
+                        if new_loss <= current_loss_val + c1 * step_size * expected_improve:
+                            step_accepted = True
+                            break
+
+                        step_size *= 0.5
+
+                    if step_accepted:
+
+                        damping = max(1e-4, damping * 0.5)
+
+                    else:
+
+                        set_flat_params(model, current_weights)
+
+                        damping = min(100.0, damping * 2.0)
+                    if epoch % 1 == 0:
+                        self.progress_signal.emit(epoch, current_loss_val)
+
+            file_name = "kalman_noise_net_adam.pth" if self.optimizer_name == "Adam" else "kalman_noise_net_er.pth"
+            torch.save(model.state_dict(), file_name)
+            self.finished_signal.emit(self.optimizer_name, loss_history, model.state_dict())
 
         except Exception as e:
             import traceback
@@ -345,17 +367,25 @@ class KalmanApp(QWidget):
     def update_training_progress(self, epoch, loss):
         self.lbl_train_status.setText(f"Epoch {epoch} - Loss: {loss:.6f}")
 
-    def training_finished(self, opt_name, loss_history):
-        self.loss_histories[opt_name] = loss_history
-        self.lbl_train_status.setText(f"{opt_name} Training Complete!")
-        self.btn_train.setEnabled(True)
+    def training_finished(self, opt_name, loss_history, trained_state_dict):
+        try:
+            self.loss_histories[opt_name] = loss_history
+            if opt_name == "Adam":
+                self.model_adam.load_state_dict(trained_state_dict)
+                self.model_adam.eval()
+            else:
+                self.model_er.load_state_dict(trained_state_dict)
+                self.model_er.eval()
 
-        if opt_name == "Adam":
-            self.model_adam.load_state_dict(torch.load("kalman_noise_net_adam.pth"))
-            self.model_adam.eval()
-        else:
-            self.model_er.load_state_dict(torch.load("kalman_noise_net_er.pth"))
-            self.model_er.eval()
+            self.lbl_train_status.setText(f"{opt_name} Training Complete!")
+
+        except Exception as e:
+            import traceback
+            print(f"Ошибка при обновлении весов в GUI:\n{traceback.format_exc()}")
+            self.lbl_train_status.setText("Error applying weights!")
+
+        finally:
+            self.btn_train.setEnabled(True)
 
     def show_convergence(self):
         self.canvas.fig.clear()
