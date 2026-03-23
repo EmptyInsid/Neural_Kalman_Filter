@@ -2,7 +2,6 @@ import torch
 import torch.nn as nn
 import time
 
-# Импорт ваших модулей и функций симуляции (согласно combined_output.txt)
 from app.neural_calman_app.model.model import simulate_physical_motion
 
 
