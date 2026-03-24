@@ -76,7 +76,7 @@ def kalman_filter(
 
             x_pred = xOpt[t] + a*T*t
 
-        elif motion_type == "physical":
+        elif motion_type in ["physical", "maneuver"]:
 
             vOpt[t+1] = vOpt[t] + a*T
 
@@ -124,7 +124,7 @@ def kalman_full_experiment(N, a, T, motion_type):
     # sigmaPsi фиксирован, меняем sigmaEta
     for sigmaEta in sigmaEta_vals:
 
-        if motion_type == "physical":
+        if motion_type in ["physical", "maneuver"]:
             x, z = simulate_physical_motion(N, a, T, sigmaPsi_const, sigmaEta)
         else:
             x, z = simulate_motion(N, a, T, sigmaPsi_const, sigmaEta)
@@ -138,7 +138,7 @@ def kalman_full_experiment(N, a, T, motion_type):
     # sigmaEta фиксирован, меняем sigmaPsi
     for sigmaPsi in sigmaPsi_vals:
 
-        if motion_type == "physical":
+        if motion_type in ["physical", "maneuver"]:
             x, z = simulate_physical_motion(N, a, T, sigmaPsi_const, sigmaEta)
         else:
             x, z = simulate_motion(N, a, T, sigmaPsi_const, sigmaEta)
@@ -155,7 +155,7 @@ def kalman_full_experiment(N, a, T, motion_type):
     for i, sigmaPsi in enumerate(sigmaPsi_vals):
         for j, sigmaEta in enumerate(sigmaEta_vals):
 
-            if motion_type == "physical":
+            if motion_type in ["physical", "maneuver"]:
                 x, z = simulate_physical_motion(N, a, T, sigmaPsi_const, sigmaEta)
             else:
                 x, z = simulate_motion(N, a, T, sigmaPsi_const, sigmaEta)
@@ -213,7 +213,7 @@ def simulate_changing_noise_motion(
                 + np.random.normal(0, sigmaPsi)
             )
 
-        elif motion_type == "physical":
+        elif motion_type in ["physical", "maneuver"]:
 
             v[t+1] = v[t] + a*T + np.random.normal(0, sigmaPsi)
 
@@ -230,3 +230,47 @@ def simulate_changing_noise_motion(
         )
 
     return x, z, sigma
+
+def simulate_maneuver_motion(N, T, sigmaPsi, sigmaEta):
+
+    x = np.zeros(N)
+    v = np.zeros(N)
+    z = np.zeros(N)
+
+    x[0] = 0
+    v[0] = 1.0
+
+    z[0] = x[0] + np.random.normal(0, sigmaEta)
+
+    a = 0.0
+
+    for t in range(N - 1):
+        if t < N // 4:
+            a_base = 0.8
+        elif t < N // 2:
+            a_base = 0.0
+        elif t < 3 * N // 4:
+            a_base = -0.7
+        else:
+            a_base = 0.3
+
+        a = 0.9 * a + 0.1 * a_base
+
+        a += np.random.normal(0, 0.15)
+
+        if np.random.rand() < 0.05: 
+            a += np.random.normal(0, 2.0)
+
+        a = np.clip(a, -3, 3)
+
+        v[t + 1] = v[t] + a * T + np.random.normal(0, sigmaPsi)
+
+        x[t + 1] = (
+            x[t]
+            + v[t] * T
+            + 0.5 * a * T**2
+        )
+
+        z[t + 1] = x[t + 1] + np.random.normal(0, sigmaEta)
+
+    return x, z
