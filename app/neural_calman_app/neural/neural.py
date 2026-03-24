@@ -30,20 +30,13 @@ class KalmanGainNet(nn.Module):
 class NoiseEstimator(nn.Module):
 
     def __init__(self):
-
         super().__init__()
-
         self.net = nn.Sequential(
-
-            nn.Linear(6, 64),
-            nn.ReLU(),
-
-            nn.Linear(64, 64),
-            nn.ReLU(),
-
-            nn.Linear(64, 1),
-            nn.Softplus()   # σ > 0
-
+            nn.Linear(6, 32),
+            nn.Tanh(),  # Only Tanh, GELU or Mish!
+            nn.Linear(32, 16),
+            nn.Tanh(),
+            nn.Linear(16, 1)
         )
 
     def forward(self, x):
