@@ -533,40 +533,48 @@ class KalmanApp(QWidget):
         self.true_point, = ax.plot([], [], "o", color="black", markersize=8)
         self.sensor_point, = ax.plot([], [], "x", color="#ea02ff", markersize=8)
 
-        self.compare_mode = False
+        self.animated_filters = []
 
         if self.filter_kalman.isChecked():
-            ax.set_title(f"Classical Kalman")
-            self.xOpt, self.DZ, self.SKO, self.K = kalman_filter(self.x, self.z, N, a, T, sigmaPsi, sigmaEta,
-                                                                 motion_type)
-            self.kalman_line, = ax.plot([], [], color="#00d4ff", label="Classical Filtered")
-            self.kalman_point, = ax.plot([], [], "o", color="#00d4ff", markersize=8)
+            ax.set_title("Classical Kalman")
+            xOpt, DZ, SKO, K = kalman_filter(self.x, self.z, N, a, T, sigmaPsi, sigmaEta, motion_type)
 
-            self.canvas.ax2.plot(self.DZ, color="#00d4ff")
-            self.canvas.ax2.set_title(f"Error %, SKO={self.SKO:.2f}")
+            line, = ax.plot([], [], color="#00d4ff", label=f"Classical (SKO={SKO:.2f})")
+            point, = ax.plot([], [], "o", color="#00d4ff", markersize=8)
 
+            self.animated_filters.append({"line": line, "point": point, "data": xOpt})
+            self.canvas.ax2.plot(DZ, color="#00d4ff")
+            self.canvas.ax2.set_title(f"Error %, SKO={SKO:.2f}")
 
         else:
-            ax.set_title("Compare neural filters")
             if not self.models_history:
-                print("Train neural network first!")
-
+                QMessageBox.warning(self, "No data found", "Train at least one neural network first!")
                 return
+
+            ax.set_title("Neural filter comparison")
+            colors = ["#00d4ff", "#ff9900", "#33cc33", "#ff3399", "#cccc00"]
+
             for i, run in enumerate(self.models_history):
-                colors = ["#00d4ff", "#ff9900", "#33cc33", "#ff3399", "#cccc00"]
                 color = colors[i % len(colors)]
+
                 xOpt, DZ, SKO, _ = neural_kalman_filter(
                     self.x, self.z, N, a, T, run["model"], motion_type
                 )
-                ax.plot(self.k, xOpt, color=color, label=f'{run["name"]} (SKO={SKO:.2f})')
+
+                line, = ax.plot([], [], color=color, label=f'{run["name"]} (SKO={SKO:.2f})')
+                point, = ax.plot([], [], "o", color=color, markersize=6)
+
+                self.animated_filters.append({"line": line, "point": point, "data": xOpt})
                 self.canvas.ax2.plot(DZ, color=color, label=run["name"])
-            self.canvas.ax2.set_title("Compare errors %")
+
+            self.canvas.ax2.set_title("Loss comparison %")
             self.canvas.ax2.legend()
 
         ax.legend()
         self.canvas.ax2.set_xlabel("time")
         self.canvas.ax2.set_ylabel("error %")
         self.canvas.draw()
+
         self.timer.start(16)
 
     def update_animation(self):
@@ -579,14 +587,9 @@ class KalmanApp(QWidget):
         self.true_point.set_data([self.k[self.frame]], [self.x[self.frame]])
         self.sensor_point.set_data([self.k[self.frame]], [self.z[self.frame]])
 
-        if self.compare_mode:
-            self.kalman_line_adam.set_data(self.k[:self.frame], self.xOpt_adam[:self.frame])
-            self.kalman_line_er.set_data(self.k[:self.frame], self.xOpt_er[:self.frame])
-            self.kalman_point_adam.set_data([self.k[self.frame]], [self.xOpt_adam[self.frame]])
-            self.kalman_point_er.set_data([self.k[self.frame]], [self.xOpt_er[self.frame]])
-        else:
-            self.kalman_line.set_data(self.k[:self.frame], self.xOpt[:self.frame])
-            self.kalman_point.set_data([self.k[self.frame]], [self.xOpt[self.frame]])
+        for filter_item in self.animated_filters:
+            filter_item["line"].set_data(self.k[:self.frame], filter_item["data"][:self.frame])
+            filter_item["point"].set_data([self.k[self.frame]], [filter_item["data"][self.frame]])
 
         self.canvas.draw_idle()
         self.frame += 1
