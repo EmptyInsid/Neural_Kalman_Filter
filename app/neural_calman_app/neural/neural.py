@@ -26,21 +26,33 @@ class KalmanGainNet(nn.Module):
     def forward(self, x):
 
         return self.net(x)
-    
-class NoiseEstimator(nn.Module):
 
-    def __init__(self):
+
+class DynamicNoiseEstimator(nn.Module):
+    def __init__(self, hidden_layers, activations):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(6, 32),
-            nn.Tanh(),  # Only Tanh, GELU or Mish!
-            nn.Linear(32, 16),
-            nn.Tanh(),
-            nn.Linear(16, 1)
-        )
+        layers = []
+        in_features = 6
+
+        for out_features, act_name in zip(hidden_layers, activations):
+            layers.append(nn.Linear(in_features, out_features))
+
+            if act_name == "Tanh":
+                layers.append(nn.Tanh())
+            elif act_name == "GELU":
+                layers.append(nn.GELU())
+            elif act_name == "Mish":
+                layers.append(nn.Mish())
+            elif act_name == "ReLU":
+                layers.append(nn.ReLU())
+
+            in_features = out_features
+
+        layers.append(nn.Linear(in_features, 1))
+
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x):
-
         return self.net(x)
 
 

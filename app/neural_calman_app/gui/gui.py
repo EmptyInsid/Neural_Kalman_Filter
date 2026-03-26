@@ -9,7 +9,9 @@ import traceback
 from PyQt6.QtCore import QTimer, QThread, pyqtSignal
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QHBoxLayout, QRadioButton, QButtonGroup,
-    QPushButton, QDoubleSpinBox, QSpinBox, QFormLayout, QGroupBox, QCheckBox, QLabel
+    QPushButton, QDoubleSpinBox, QSpinBox, QFormLayout, QGroupBox, QCheckBox, QLabel,
+    QDialog, QTableWidget, QTableWidgetItem, QHeaderView, QComboBox,
+    QMessageBox, QDialogButtonBox, QAbstractItemView
 )
 
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
@@ -24,7 +26,7 @@ from app.neural_calman_app.model.model import (
     simulate_changing_noise_motion
 )
 from app.neural_calman_app.neural.neural import (
-    NoiseEstimator,
+    DynamicNoiseEstimator,
     neural_kalman_filter
 )
 from app.neural_calman_app.neural.train_model import hvp
@@ -75,13 +77,14 @@ def cg_solve(f_Hx, b, cg_iters=15, residual_tol=1e-8):
 
 class TrainingThread(QThread):
     progress_signal = pyqtSignal(int, float)
-    finished_signal = pyqtSignal(str, object, object)
+    finished_signal = pyqtSignal(str, object, object, dict)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, optimizer_name, epochs):
+    def __init__(self, optimizer_name, epochs, nn_config):
         super().__init__()
         self.optimizer_name = optimizer_name
         self.epochs = epochs
+        self.nn_config = nn_config
 
     def run(self):
         try:
@@ -123,8 +126,15 @@ class TrainingThread(QThread):
 
             X = (X - X.mean(dim=0)) / (X.std(dim=0) + 1e-8)
 
-            model = NoiseEstimator()
-            loss_fn = nn.MSELoss()
+            model = DynamicNoiseEstimator(self.nn_config["layers"], self.nn_config["activations"])
+            loss_type = self.nn_config["loss"]
+            if loss_type == "MAE":
+                loss_fn = nn.L1Loss()
+            elif loss_type == "Huber":
+                loss_fn = nn.HuberLoss()
+            else:
+                loss_fn = nn.MSELoss()
+
             loss_history = []
 
             if self.optimizer_name == "Adam":
@@ -201,12 +211,12 @@ class TrainingThread(QThread):
 
             file_name = "kalman_noise_net_adam.pth" if self.optimizer_name == "Adam" else "kalman_noise_net_er.pth"
             torch.save(model.state_dict(), file_name)
-            self.finished_signal.emit(self.optimizer_name, loss_history, model.state_dict())
+            self.finished_signal.emit(self.optimizer_name, loss_history, model.state_dict(), self.nn_config)
 
         except Exception as e:
             import traceback
             err_msg = traceback.format_exc()
-            print(f"Критическая ошибка в потоке обучения:\n{err_msg}")
+            print(f"Критическая ошибка:\n{err_msg}")
             self.error_signal.emit(str(e))
 
 class MplCanvas(FigureCanvasQTAgg):
@@ -214,6 +224,78 @@ class MplCanvas(FigureCanvasQTAgg):
         self.fig = Figure(figsize=(16, 8))
         super().__init__(self.fig)
 
+
+class NeuralConfigDialog(QDialog):
+    def __init__(self, current_config, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Neural network architecture")
+        self.resize(500, 400)
+
+        layout = QVBoxLayout()
+
+        form = QFormLayout()
+        self.loss_combo = QComboBox()
+        self.loss_combo.addItems(["MSE (Mean Squared Error)", "MAE (L1 Loss)", "Huber Loss"])
+        self.loss_combo.setCurrentText(current_config.get("loss", "MSE (Mean Squared Error)"))
+        form.addRow("Loss function:", self.loss_combo)
+        layout.addLayout(form)
+
+        self.table = QTableWidget(0, 2)
+        self.table.setHorizontalHeaderLabels(["Neuron amount", "Activation function"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        layout.addWidget(self.table)
+
+        btn_layout = QHBoxLayout()
+        self.btn_add = QPushButton("Add layer")
+        self.btn_add.clicked.connect(self.add_layer)
+        self.btn_remove = QPushButton("Remove layer")
+        self.btn_remove.clicked.connect(self.remove_layer)
+        btn_layout.addWidget(self.btn_add)
+        btn_layout.addWidget(self.btn_remove)
+        layout.addLayout(btn_layout)
+
+        self.button_box = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        self.button_box.accepted.connect(self.accept)
+        self.button_box.rejected.connect(self.reject)
+        layout.addWidget(self.button_box)
+
+        self.setLayout(layout)
+
+        for neurons, act in zip(current_config["layers"], current_config["activations"]):
+            self.add_layer(neurons, act)
+
+    def add_layer(self, neurons=32, activation="Tanh"):
+        row = self.table.rowCount()
+        self.table.insertRow(row)
+
+        spin = QSpinBox()
+        spin.setRange(1, 1024)
+        spin.setValue(int(neurons))
+        self.table.setCellWidget(row, 0, spin)
+
+        combo = QComboBox()
+        combo.addItems(["Tanh", "Mish", "GELU", "ReLU"])
+        combo.setCurrentText(activation)
+        self.table.setCellWidget(row, 1, combo)
+
+    def remove_layer(self):
+        current_row = self.table.currentRow()
+        if current_row >= 0:
+            self.table.removeRow(current_row)
+
+    def get_config(self):
+        layers = []
+        activations = []
+        for row in range(self.table.rowCount()):
+            layers.append(self.table.cellWidget(row, 0).value())
+            activations.append(self.table.cellWidget(row, 1).currentText())
+
+        return {
+            "loss": self.loss_combo.currentText().split(" ")[0],
+            "layers": layers,
+            "activations": activations
+        }
 
 class KalmanApp(QWidget):
     def __init__(self):
@@ -232,9 +314,17 @@ class KalmanApp(QWidget):
             QSpinBox, QDoubleSpinBox { background-color: #2a2a2a; border: 1px solid #444; padding: 3px; }
         """)
 
-        self.model_adam = NoiseEstimator()
-        self.model_er = NoiseEstimator()
+        self.current_nn_config = {
+            "loss": "MSE",
+            "layers": [32, 16],
+            "activations": ["Tanh", "Tanh"]
+        }
+
+        self.model_adam = DynamicNoiseEstimator(self.current_nn_config["layers"], self.current_nn_config["activations"])
+        self.model_er = DynamicNoiseEstimator(self.current_nn_config["layers"], self.current_nn_config["activations"])
         self.loss_histories = {"Adam": [], "ER": []}
+
+        self.models_history = []
 
         if os.path.exists("kalman_noise_net_adam.pth"):
             try:
@@ -322,12 +412,20 @@ class KalmanApp(QWidget):
 
         self.cb_compare_opts = QCheckBox("Compare Adam and ER trajectories")
 
+        self.btn_config = QPushButton("Neural network architecture")
+        self.btn_config.clicked.connect(self.open_nn_config)
+
+        self.btn_clear = QPushButton("Reset graphs and history")
+        self.btn_clear.clicked.connect(self.clear_history)
+
+        train_layout.addWidget(self.btn_config)
         train_layout.addWidget(self.radio_adam)
         train_layout.addWidget(self.radio_er)
         train_layout.addWidget(self.btn_train)
         train_layout.addWidget(self.lbl_train_status)
         train_layout.addWidget(self.btn_compare_conv)
         train_layout.addWidget(self.cb_compare_opts)
+        train_layout.addWidget(self.btn_clear)
 
         train_box.setLayout(train_layout)
         control_panel.addWidget(train_box)
@@ -447,38 +545,23 @@ class KalmanApp(QWidget):
             self.canvas.ax2.plot(self.DZ, color="#00d4ff")
             self.canvas.ax2.set_title(f"Error %, SKO={self.SKO:.2f}")
 
+
         else:
-            if self.cb_compare_opts.isChecked():
-                self.compare_mode = True
-                ax.set_title("Neural Kalman: Adam vs ER")
+            ax.set_title("Compare neural filters")
+            if not self.models_history:
+                print("Train neural network first!")
 
-                self.xOpt_adam, self.DZ_adam, self.SKO_adam, _ = neural_kalman_filter(self.x, self.z, N, a, T,
-                                                                                      self.model_adam, motion_type)
-                self.xOpt_er, self.DZ_er, self.SKO_er, _ = neural_kalman_filter(self.x, self.z, N, a, T, self.model_er,
-                                                                                motion_type)
-
-                self.kalman_line_adam, = ax.plot([], [], color="#00d4ff", label="Neural (Adam)")
-                self.kalman_line_er, = ax.plot([], [], color="#ff9900", label="Neural (ER)")
-                self.kalman_point_adam, = ax.plot([], [], "o", color="#00d4ff", markersize=6)
-                self.kalman_point_er, = ax.plot([], [], "o", color="#ff9900", markersize=6)
-
-                self.canvas.ax2.plot(self.DZ_adam, color="#00d4ff", label=f"Adam Error (SKO={self.SKO_adam:.2f})")
-                self.canvas.ax2.plot(self.DZ_er, color="#ff9900", label=f"ER Error (SKO={self.SKO_er:.2f})")
-                self.canvas.ax2.legend()
-                self.canvas.ax2.set_title("Error Comparison")
-
-            else:
-                selected_model = self.model_adam if self.radio_adam.isChecked() else self.model_er
-                opt_name = "Adam" if self.radio_adam.isChecked() else "ER"
-                ax.set_title(f"Neural Kalman ({opt_name})")
-
-                self.xOpt, self.DZ, self.SKO, self.K = neural_kalman_filter(self.x, self.z, N, a, T, selected_model,
-                                                                            motion_type)
-                self.kalman_line, = ax.plot([], [], color="#00d4ff", label=f"Neural Filtered ({opt_name})")
-                self.kalman_point, = ax.plot([], [], "o", color="#00d4ff", markersize=8)
-
-                self.canvas.ax2.plot(self.DZ, color="#00d4ff")
-                self.canvas.ax2.set_title(f"Error %, SKO={self.SKO:.2f}")
+                return
+            for i, run in enumerate(self.models_history):
+                colors = ["#00d4ff", "#ff9900", "#33cc33", "#ff3399", "#cccc00"]
+                color = colors[i % len(colors)]
+                xOpt, DZ, SKO, _ = neural_kalman_filter(
+                    self.x, self.z, N, a, T, run["model"], motion_type
+                )
+                ax.plot(self.k, xOpt, color=color, label=f'{run["name"]} (SKO={SKO:.2f})')
+                self.canvas.ax2.plot(DZ, color=color, label=run["name"])
+            self.canvas.ax2.set_title("Compare errors %")
+            self.canvas.ax2.legend()
 
         ax.legend()
         self.canvas.ax2.set_xlabel("time")
@@ -584,6 +667,69 @@ class KalmanApp(QWidget):
     def training_error(self, err_msg):
         self.lbl_train_status.setText("Error! Check console.")
         self.btn_train.setEnabled(True)
+
+    def open_nn_config(self):
+        dialog = NeuralConfigDialog(self.current_nn_config, self)
+        if dialog.exec():
+            self.current_nn_config = dialog.get_config()
+            self.lbl_train_status.setText("Config updated. Training required")
+
+    def start_training(self):
+        opt_name = "Adam" if self.radio_adam.isChecked() else "ER"
+        epochs = 500 if opt_name == "Adam" else 30
+
+        self.btn_train.setEnabled(False)
+        self.lbl_train_status.setText(f"Training {opt_name}...")
+
+        self.thread = TrainingThread(opt_name, epochs, self.current_nn_config)
+        self.thread.progress_signal.connect(self.update_training_progress)
+        self.thread.finished_signal.connect(self.training_finished)
+        self.thread.error_signal.connect(self.training_error)
+        self.thread.start()
+
+    def training_finished(self, opt_name, loss_history, trained_state_dict, config):
+        try:
+            model = DynamicNoiseEstimator(config["layers"], config["activations"])
+            model.load_state_dict(trained_state_dict)
+            model.eval()
+
+            arch_str = "-".join(map(str, config["layers"]))
+            run_name = f"{opt_name} ({arch_str}, {config['loss']})"
+
+            self.models_history.append({
+                "name": run_name,
+                "model": model,
+                "loss_history": loss_history
+            })
+
+            self.lbl_train_status.setText(f"{run_name} trained!")
+        finally:
+            self.btn_train.setEnabled(True)
+
+    def clear_history(self):
+        self.models_history.clear()
+        self.canvas.fig.clear()
+        self.canvas.draw()
+        self.lbl_train_status.setText("History cleared.")
+
+    def show_convergence(self):
+        self.canvas.fig.clear()
+        ax = self.canvas.fig.add_subplot(111)
+
+        if not self.models_history:
+            ax.text(0.5, 0.5, "No data.\nTrain at least one model.",
+                    ha='center', va='center', fontsize=14)
+        else:
+            for run in self.models_history:
+                ax.plot(run["loss_history"], label=run["name"])
+
+            ax.set_title("Compare convergence of optimizators and architectures")
+            ax.set_xlabel("Epochs")
+            ax.set_ylabel("Loss")
+            ax.set_yscale('log')
+            ax.legend()
+
+        self.canvas.draw()
 
 
 if __name__ == "__main__":
