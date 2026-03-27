@@ -21,7 +21,8 @@ from app.neural_calman_app.model.model import (
     simulate_physical_motion,
     kalman_filter,
     kalman_full_experiment,
-    simulate_changing_noise_motion
+    simulate_changing_noise_motion,
+    simulate_maneuver_motion
 )
 from app.neural_calman_app.neural.neural import (
     NoiseEstimator,
@@ -289,9 +290,11 @@ class KalmanApp(QWidget):
         model_layout = QVBoxLayout()
         self.model_classic = QRadioButton("Simple model")
         self.model_physics = QRadioButton("Physical motion")
+        self.model_maneuver = QRadioButton("Maneuvering object")
         self.model_classic.setChecked(True)
         model_layout.addWidget(self.model_classic)
         model_layout.addWidget(self.model_physics)
+        model_layout.addWidget(self.model_maneuver)
         model_box.setLayout(model_layout)
         control_panel.addWidget(model_box)
 
@@ -415,9 +418,24 @@ class KalmanApp(QWidget):
         sigmaPsi = self.sigmaPsi.value()
         sigmaEta = self.sigmaEta.value()
 
-        motion_model = simulate_motion if self.model_classic.isChecked() else simulate_physical_motion
-        self.x, self.z = motion_model(N, a, T, sigmaPsi, sigmaEta)
-        motion_type = "simple" if self.model_classic.isChecked() else "physical"
+        motion_model = self.get_motion_model()
+        if motion_model == simulate_maneuver_motion:
+            self.x, self.z = motion_model(
+                N,
+                T,
+                sigmaPsi,
+                sigmaEta
+            )
+        else:
+            self.x, self.z = motion_model(
+                N,
+                a,
+                T,
+                sigmaPsi,
+                sigmaEta
+            )
+
+        motion_type = self.get_motion_type()
 
         self.k = np.arange(N)
         self.frame = 0
@@ -512,7 +530,7 @@ class KalmanApp(QWidget):
         N = self.N.value();
         a = self.a.value();
         T = self.T.value()
-        motion_type = "simple" if self.model_classic.isChecked() else "physical"
+        motion_type = self.get_motion_type()
         sigmaEta_vals, sigmaPsi_vals, sko_eta, sko_psi, error_map = kalman_full_experiment(N, a, T, motion_type)
 
         self.canvas.fig.clear()
@@ -549,7 +567,7 @@ class KalmanApp(QWidget):
         N = self.N.value();
         a = self.a.value();
         T = self.T.value()
-        motion_type = "simple" if self.model_classic.isChecked() else "physical"
+        motion_type = self.get_motion_type()
         x, z, sigma = simulate_changing_noise_motion(N, a, T, motion_type)
 
         xOpt_k, DZ_k, SKO_k, _ = kalman_filter(x, z, N, a, T, 1, 1, motion_type)
@@ -584,6 +602,23 @@ class KalmanApp(QWidget):
     def training_error(self, err_msg):
         self.lbl_train_status.setText("Error! Check console.")
         self.btn_train.setEnabled(True)
+
+    def get_motion_model(self):
+        if self.model_classic.isChecked():
+            return simulate_motion
+        elif self.model_physics.isChecked():
+            return simulate_physical_motion
+        else:
+            return simulate_maneuver_motion
+    
+    def get_motion_type(self):
+        if self.model_classic.isChecked():
+            return "simple"
+        elif self.model_physics.isChecked():
+            return "physical"
+        else:
+            return "maneuver"
+
 
 
 if __name__ == "__main__":
