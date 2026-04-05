@@ -132,7 +132,7 @@ class TrainingThread(QThread):
             if loss_type == "MAE":
                 loss_fn = nn.L1Loss()
             elif loss_type == "Huber":
-                loss_fn = nn.HuberLoss()
+                loss_fn = nn.HuberLoss(delta=self.nn_config.get("huber_delta", 1.0))
             else:
                 loss_fn = nn.MSELoss()
 
@@ -237,9 +237,19 @@ class NeuralConfigDialog(QDialog):
         form = QFormLayout()
         self.loss_combo = QComboBox()
         self.loss_combo.addItems(["MSE (Mean Squared Error)", "MAE (L1 Loss)", "Huber Loss"])
-        self.loss_combo.setCurrentText(current_config.get("loss", "MSE (Mean Squared Error)"))
+
+        self.delta_label = QLabel("Huber Delta (δ):")
+        self.delta_spin = QDoubleSpinBox()
+        self.delta_spin.setRange(0.01, 10.0)
+        self.delta_spin.setSingleStep(0.1)
+        self.delta_spin.setValue(current_config.get("huber_delta", 1.0))
+
         form.addRow("Loss function:", self.loss_combo)
+        form.addRow(self.delta_label, self.delta_spin)
         layout.addLayout(form)
+
+        self.loss_combo.currentTextChanged.connect(self.update_huber_visibility)
+        self.update_huber_visibility(self.loss_combo.currentText())
 
         self.table = QTableWidget(0, 2)
         self.table.setHorizontalHeaderLabels(["Neuron amount", "Activation function"])
@@ -265,6 +275,11 @@ class NeuralConfigDialog(QDialog):
 
         for neurons, act in zip(current_config["layers"], current_config["activations"]):
             self.add_layer(neurons, act)
+
+    def update_huber_visibility(self, text):
+        visible = "Huber" in text
+        self.delta_label.setVisible(visible)
+        self.delta_spin.setVisible(visible)
 
     def add_layer(self, neurons=32, activation="Tanh"):
         row = self.table.rowCount()
@@ -293,7 +308,9 @@ class NeuralConfigDialog(QDialog):
             activations.append(self.table.cellWidget(row, 1).currentText())
 
         return {
-            "loss": self.loss_combo.currentText().split(" ")[0],
+            "loss_name": self.loss_combo.currentText(),
+            "loss_type": self.loss_combo.currentText().split(" ")[0],
+            "huber_delta": self.delta_spin.value(),
             "layers": layers,
             "activations": activations
         }
