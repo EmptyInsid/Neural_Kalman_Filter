@@ -128,7 +128,7 @@ class TrainingThread(QThread):
             X = (X - X.mean(dim=0)) / (X.std(dim=0) + 1e-8)
 
             model = DynamicNoiseEstimator(self.nn_config["layers"], self.nn_config["activations"])
-            loss_type = self.nn_config["loss"]
+            loss_type = self.nn_config.get("loss_type", self.nn_config.get("loss", "MSE"))
             if loss_type == "MAE":
                 loss_fn = nn.L1Loss()
             elif loss_type == "Huber":
@@ -333,7 +333,9 @@ class KalmanApp(QWidget):
         """)
 
         self.current_nn_config = {
-            "loss": "MSE",
+            "loss_name": "MSE (Mean Squared Error)",
+            "loss_type": "MSE",
+            "huber_delta": 1.0,
             "layers": [32, 16],
             "activations": ["Tanh", "Tanh"]
         }
@@ -662,7 +664,7 @@ class KalmanApp(QWidget):
 
     def start_training(self):
         opt_name = "Adam" if self.radio_adam.isChecked() else "ER"
-        epochs = 500 if opt_name == "Adam" else 30
+        epochs = 500 if opt_name == "Adam" else 100
 
         self.btn_train.setEnabled(False)
         self.lbl_train_status.setText(f"Training {opt_name}...")
@@ -680,8 +682,7 @@ class KalmanApp(QWidget):
             model.eval()
 
             arch_str = "-".join(map(str, config["layers"]))
-            run_name = f"{opt_name} ({arch_str}, {config['loss']})"
-
+            run_name = f"{opt_name} ({arch_str}, {config.get('loss_type', 'MSE')})"
             self.models_history.append({
                 "name": run_name,
                 "model": model,
